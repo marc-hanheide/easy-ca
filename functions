@@ -30,8 +30,10 @@ clients.tpl
 server.tpl
 signing.tpl
 codesign.tpl
-root_index.tpl
-sign_index.tpl
+html_footer.tpl
+html_header.tpl
+html_ca_fragment.tpl
+html_crl_fragment.tpl
 "
 
 export BINARIES_SIGN="
@@ -54,9 +56,12 @@ make-client-ovpn
 export TEMPLATES_SIGN="
 clients.tpl
 server.tpl
-sign_index.tpl
 signing.tpl
 codesign.tpl
+html_footer.tpl
+html_header.tpl
+html_ca_fragment.tpl
+html_crl_fragment.tpl
 "
 
 # Output highlighting
@@ -76,7 +81,7 @@ fullpath() {
 }
 
 ##
-## template TEMPLATE_FILE DESTINATION_FILE
+## template [ -a ] TEMPLATE_FILE DESTINATION_FILE
 ##
 ## Performs variable interpolation on TEMPLATE_FILE and copies
 ## the result to DESTINATION_FILE. All strings in TEMPLATE_FILE
@@ -84,11 +89,22 @@ fullpath() {
 ## environment variable with the same name.
 ##
 template() {
+    local append=
+    if [ "$1" = -a ]; then
+      append=1
+      shift
+    fi
+    local template="$1"
+    local destination="$2"
     local REGEX=""
     for VAR in ${!CA_*}; do
         REGEX="${REGEX}s#{{\s*${VAR}\s*}}#${!VAR}#g; "
     done
-    sed -e "${REGEX}" < "$1" > "$2"
+    if [ "$append" ]; then
+      sed -e "${REGEX}" < "$1" >> "$2"
+    else
+      sed -e "${REGEX}" < "$1" > "$2"
+    fi
 }
 
 

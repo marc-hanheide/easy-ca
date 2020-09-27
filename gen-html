@@ -17,14 +17,14 @@ source "${BIN_DIR}/defaults.conf"
 
 usage() {
     echo "Usage: $0 [-f]"
-    echo "    Create a shareable html directory, containing root and signing"
-    echo "    certificates as well as the certificate revokation list"
+    echo "    Create a shareable html directory, containing the complete"
+    echo "    certificate chain, as well as the certificate revokation list"
     echo
     echo "Options:"
     echo "    -f       Override existing html directory"
 }
 
-if [ ! -f ca/ca.crt ]; then
+if [ ! -f ca/chain.pem ]; then
     echo -e "$ERR Must be run inside a CA directory!"
     exit 2
 fi
@@ -43,7 +43,7 @@ done
 if [ -d html ]; then
     if [ $FORCE -ne 1 ]; then
         echo -e "$ERR Html directory exists already!"
-        echo "Specify -f to override"
+        echo "Specify -f to force removal"
         exit 2
     fi
 
@@ -56,49 +56,61 @@ echo -e "$NOTE Creating directory structure"
 mkdir html/
 mkdir html/ca/
 
-if openssl verify -CAfile ca/ca.crt ca/ca.crt >/dev/null 2>&1; then
-    echo -e "$NOTE Creating index.html for root CA"
+echo -e "$NOTE Generating HTML"
 
-    CA_HTML_ROOT_TITLE=$(openssl x509 -noout -subject -in ca/ca.crt -nameopt multiline | grep commonName | cut -d "=" -f 2-)
-    CA_HTML_ROOT_NAME=$(echo "$CA_HTML_ROOT_TITLE" | sed 's/\s\+/_/g')
-    CA_HTML_ROOT_HASH=$(openssl x509 -noout -fingerprint -sha1 -in ca/ca.crt | cut -d '=' -f 2-)
+template "${BIN_DIR}/templates/html_header.tpl" html/ca/.index.html.tmp
 
+# Write each part of the chain to html/ca/(name).crt
+write=
+parent_paths=
+local_ca_sha256=$(openssl x509 -noout -fingerprint -sha256 -in ca/ca.crt | cut -d '=' -f 2-)
+while read line; do
+  if [ "$line" == "-----BEGIN CERTIFICATE-----" ]; then
+    write=1
+  fi
+  if [ "$write" ]; then
+    echo "$line" >> html/ca/.tmp.crt
+  fi
+  if [ "$line" == "-----END CERTIFICATE-----" ]; then
+    # Stop writing
+    write=
+    # Parse certificate and move it into place
+    CA_HTML_TITLE=$(openssl x509 -noout -subject -in html/ca/.tmp.crt -nameopt multiline | grep commonName | cut -d "=" -f 2- | sed 's/^ //')
+    CA_HTML_NAME=$(echo "$CA_HTML_TITLE" | sed 's/\s\+/_/g')
+    CA_HTML_SHA256=$(openssl x509 -noout -fingerprint -sha256 -in html/ca/.tmp.crt | cut -d '=' -f 2-)
+    CA_HTML_SHA1=$(openssl x509 -noout -fingerprint -sha1 -in html/ca/.tmp.crt | cut -d '=' -f 2-)
+    path="html/ca/$CA_HTML_NAME.crt"
+    mv -f html/ca/.tmp.crt "$path"
+    # Generate fullchain alternative, save cert path as (future) parent. Root
+    # should be last in a fullchain file, so begin with current cert.
+    cat $path $parent_paths > ${path%.crt}-fullchain.crt
+    parent_paths="$path $parent_paths"
 
-    template "${BIN_DIR}/templates/root_index.tpl" "html/ca/index.html"
+    # Add ca fragment to index file
+    template -a "${BIN_DIR}/templates/html_ca_fragment.tpl" html/ca/.index.html.tmp
 
-    echo -e "$NOTE Copying certs"
+    # If we are currently looking at the CA hosted at the current directory, or
+    # if the CRL for the CA is stored in the ca/, directory add a link to the crl
+    if [ "$local_ca_sha256" = "$CA_HTML_SHA256" ]; then
+      # Add crl fragment to index file
+      template -a "${BIN_DIR}/templates/html_crl_fragment.tpl" html/ca/.index.html.tmp
+      # Copy CRL in place
+      cp ca/ca.crl html/ca/${CA_HTML_NAME}.crl
+    elif [ -f "ca/${CA_HTML_NAME}.crl" ]; then
+      # Add crl fragment to index file
+      template -a "${BIN_DIR}/templates/html_crl_fragment.tpl" html/ca/.index.html.tmp
+      # Copy CRL in place
+      cp ca/${CA_HTML_NAME}.crl html/ca/${CA_HTML_NAME}.crl
+    else
+      echo -e "$NOTE No CRL information for $CA_HTML_TITLE, not generating link"
+    fi
 
-    cp ca/ca.crt "html/ca/${CA_HTML_ROOT_NAME}.crt"
-    cp ca/ca.crl "html/ca/${CA_HTML_ROOT_NAME}.crl"
+  fi
 
-    ln -s "${CA_HTML_ROOT_NAME}.crt" "html/ca/$CA_NAME.crt"
-    ln -s "${CA_HTML_ROOT_NAME}.crl" "html/ca/$CA_NAME.crl"
+done < ca/chain.pem
 
-    echo -e "$SUCC html directory successfully created"
-else
-    echo -e "$NOTE Creating index.html for sign CA"
+# Finalize html
+template -a "${BIN_DIR}/templates/html_footer.tpl" html/ca/.index.html.tmp
+mv -f html/ca/.index.html.tmp html/ca/index.html
 
-    CA_HTML_ROOT_TITLE=$(openssl x509 -noout -subject -in ca/root.crt -nameopt multiline | grep commonName | cut -d "=" -f 2-)
-    CA_HTML_ROOT_NAME=$(echo "$CA_HTML_ROOT_TITLE" | sed 's/\s\+/_/g')
-    CA_HTML_ROOT_HASH=$(openssl x509 -noout -fingerprint -sha1 -in ca/root.crt | cut -d '=' -f 2-)
-    export CA_HTML_ROOT_HASH
-
-    CA_HTML_SIGN_TITLE=$(openssl x509 -noout -subject -in ca/ca.crt -nameopt multiline | grep commonName | cut -d "=" -f 2-)
-    CA_HTML_SIGN_NAME=$(echo "$CA_HTML_SIGN_TITLE" | sed 's/\s\+/_/g')
-    CA_HTML_SIGN_HASH=$(openssl x509 -noout -fingerprint -sha1 -in ca/ca.crt | cut -d '=' -f 2-)
-    export CA_HTML_SIGN_HASH
-
-
-    template "${BIN_DIR}/templates/sign_index.tpl" "html/ca/index.html"
-
-    echo -e "$NOTE Copying certs"
-
-    cp ca/root.crt "html/ca/${CA_HTML_ROOT_NAME}.crt"
-    cp ca/ca.crt "html/ca/${CA_HTML_SIGN_NAME}.crt"
-    cp ca/ca.crl "html/ca/${CA_HTML_SIGN_NAME}.crl"
-
-    ln -s "${CA_HTML_SIGN_NAME}.crt" "html/ca/$CA_NAME.crt"
-    ln -s "${CA_HTML_SIGN_NAME}.crl" "html/ca/$CA_NAME.crl"
-
-    echo -e "$SUCC html directory successfully created"
-fi
+echo -e "$SUCC HTML directory successfully created"
