@@ -90,7 +90,7 @@ authorityKeyIdentifier  = keyid:always
 # Extensions for signing CAs issued by this root CA
 [ signing_ca_ext ]
 keyUsage                = critical,keyCertSign,cRLSign
-basicConstraints        = critical,CA:true,pathlen:0
+basicConstraints        = critical,CA:true,pathlen:$ENV::SUBCA_PATHLEN
 subjectKeyIdentifier    = hash
 authorityKeyIdentifier  = keyid:always
 authorityInfoAccess     = @issuer_info

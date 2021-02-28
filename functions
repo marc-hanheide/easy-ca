@@ -37,7 +37,6 @@ html_crl_fragment.tpl
 "
 
 export BINARIES_SIGN="
-create-signing-ca
 create-server
 create-client
 create-csr
@@ -53,15 +52,22 @@ update-crl
 make-client-ovpn
 "
 
+export BINARIES_SIGN_SUBCA_POSSIBLE="
+create-signing-ca
+"
+
 export TEMPLATES_SIGN="
 clients.tpl
 server.tpl
-signing.tpl
 codesign.tpl
 html_footer.tpl
 html_header.tpl
 html_ca_fragment.tpl
 html_crl_fragment.tpl
+"
+
+export TEMPLATES_SIGN_SUBCA_POSSIBLE="
+signing.tpl
 "
 
 # Output highlighting
@@ -74,6 +80,7 @@ ERR="\033[31;1m[!]\033[0m"
 # Configuration file variables in openssl config that need to be set even if
 # not used, otherwise openssl will error out on reading it.
 export SAN=""
+export SUBCA_PATHLEN=""
 
 fullpath() {
     cd "$(dirname "$1")" || exit 2
@@ -434,3 +441,6 @@ function init_engine(){
 #function openssl_engine() {
     #[ -z $ENABLE_ENGINE ] || echo "engine dynamic -pre \"SO_PATH:${cfg_file_engine_pkcs11}\" -pre ID:pkcs11 -pre LIST_ADD:1 -pre LOAD -pre \"MODULE_PATH:${cfg_file_opensc_pkcs11}\" ${ENGINE_VERBOSE:+"-pre VERBOSE"}"
 #}
+function is_root_ca() {
+    [ "$(openssl x509 -noout -in "$1" -issuer | cut -f2- -d=)" == "$(openssl x509 -noout -in "$1" -subject | cut -f2- -d=)" ]
+}

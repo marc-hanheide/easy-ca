@@ -23,20 +23,23 @@ usage() {
     echo "Options:"
     echo "    -d CA_DIR  Target directory to be created and initialized"
     echo "               Must not exist yet"
+    echo "    -p LENGTH  Path length of created signing CA"
     echo "    -l         Symlink toolchain (designed for development)"
     echo
 }
 
-if ! openssl verify -CAfile ca/ca.crt ca/ca.crt >/dev/null 2>&1; then
+if ! openssl verify -CAfile ca/chain.pem ca/ca.crt >/dev/null 2>&1; then
     echo -e -n "$ERR " && usage && exit 2
 fi
 
 CA_DIR=
 SYMLINK=0
+SUBCA_PATHLEN=
 
-while getopts d:hl FLAG; do
+while getopts d:p:hl FLAG; do
     case $FLAG in
         d) CA_DIR=${OPTARG} ;;
+        p) SUBCA_PATHLEN=${OPTARG} ;;
         h) echo -e -n "$SUCC " && usage && exit 0;;
         l) SYMLINK=1 ;;
         *) echo -e -n "$ERR " && usage && exit 2;;
@@ -52,7 +55,44 @@ fi
 PARENT="${BIN_DIR}/.."
 CA_NAME="$( basename "${CA_DIR}" )"
 CA_PATH="${CA_PATH:-$( fullpath "${CA_DIR}")}"
+CA_DIR_PATH=$(fullpath "${CA_DIR}")
 export CA_PATH
+
+PARENT_TYPE=signing
+if is_root_ca "$PARENT/ca/ca.crt"; then
+    PARENT_TYPE=root
+fi
+
+# Check that the current path length allows us to create further sub-CAs
+# Newer openssl:s can be run as:
+# openssl x509 -noout -in ca/ca.crt -ext basicConstraints -nameopt multiline
+# ..instead of using -text + sed. Do it ugly for now, for backwards
+# compatibility.
+PARENT_PATHLEN=$(openssl x509 -noout -in ca/ca.crt -text | sed -n '/X509v3 Basic Constraints:/ { n; p; q}' | (grep -Eo 'pathlen:[0-9]+' || true) | cut -f2 -d:)
+if [ -z "$PARENT_PATHLEN" ]; then
+  # No result? No restrictions. Make sure SUBCA_PATHLEN is set to something
+  # sensible
+  if [ -z "$SUBCA_PATHLEN" ]; then
+    # Default the pathlen for new sub-CAs to 0, if we have no other info
+    SUBCA_PATHLEN=0
+  fi
+  PARENT_PATHLEN=$((SUBCA_PATHLEN + 1))
+elif [ -z "$SUBCA_PATHLEN" ]; then
+  # If we got a pathlen in the current CA, default SUBCA_PATHLEN to the
+  # current pathlen - 1
+  SUBCA_PATHLEN=$((PARENT_PATHLEN - 1))
+fi
+
+if [ "$SUBCA_PATHLEN" -ge "$PARENT_PATHLEN" ]; then
+  echo -e "$ERR Not allowed to create CA with path length $SUBCA_PATHLEN"
+  exit 1
+fi
+
+if [ "$SUBCA_PATHLEN" -gt "0" ]; then
+  # This CA can create sub-CAs
+  BINARIES_SIGN="$BINARIES_SIGN $BINARIES_SIGN_SUBCA_POSSIBLE"
+  TEMPLATES_SIGN="$TEMPLATES_SIGN $TEMPLATES_SIGN_SUBCA_POSSIBLE"
+fi
 
 echo >&2
 echo -e "$NOTE Creating new signing sub-CA in '${CA_DIR}'" >&2
@@ -65,7 +105,7 @@ trap 'rm -Rf "${CA_DIR}"' 0
 if [ -n "$CA_ENABLE_ENGINE" ]; then
     echo -e "$NOTE Your CA key is on PKCS11 device, enter PIN." >&2
 fi
-PARENT_PASS=`ask -s "$INPUT Enter passphrase for root CA key: " CA_ROOT_PASS_DEFAULT "${ROOT_PASS:-""}"`
+PARENT_PASS=`ask -s "$INPUT Enter passphrase for parent ($PARENT_TYPE) CA key: " CA_ROOT_PASS_DEFAULT "${ROOT_PASS:-""}"`
 echo >&2
 export CA_PARENT_PASS="${PARENT_PASS}"
 openssl_engine_cmd='
@@ -153,7 +193,7 @@ echo -e "$NOTE Creating the signing sub-CA certificate"
 pushd "${PARENT}" > /dev/null
 
 if [[ -n $CA_PARENT_ENABLE_ENGINE ]] && [[ -n $CA_ENABLE_ENGINE ]] ; then
-    echo -e "$ERR WARNING: please make sure you have the proper pkcs11 device inserted. You are signing the sub-CA with the root CA device. Do not have your sub-CA device inserted."
+    echo -e "$ERR WARNING: please make sure you have the proper pkcs11 device inserted. You are signing the NEW sub-CA with the parent ($PARENT_TYPE) CA device. Do not have your new sub-CA device inserted."
     echo -e -n "$INPUT Are you SURE you wish to continue? [y/N]: "
     read -r SURE
     if [ "${SURE}" != "y" ] && [ "${SURE}" != "Y" ]; then
@@ -216,7 +256,9 @@ cp "${PARENT}/ca/root.crt" ca/root.crt
 echo -e "$NOTE Verifying trusted chain"
 
 openssl verify -CAfile ca/chain.pem ca/ca.crt
-openssl verify -CAfile ca/root.crt ca/ca.crt
+if [ "$PARENT_TYPE" == root ]; then
+    openssl verify -CAfile ca/root.crt ca/ca.crt
+fi
 
 if [ $SYMLINK -eq 1 ]; then
     echo -e "$NOTE Symlinking toolchain (dev mode)"

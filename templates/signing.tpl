@@ -48,7 +48,7 @@ default_ca              = sign_ca                    # The default CA section
 
 [ sign_ca ]
 cert_opt                = ca_default                 # Certificate display options
-dir                     = {{CA_PATH}}                # Full path to root CA dir
+dir                     = {{CA_DIR_PATH}}            # Full path to root CA dir
 certs                   = $dir/certs                 # Certificates dir
 certificate             = $dir/ca/ca.crt             # The CA cert
 copy_extensions         = copy                       # Copy extensions from CSR
@@ -79,6 +79,15 @@ organizationName        = match                 # Must match
 organizationalUnitName  = supplied              # Must be present
 commonName              = supplied              # Must be present
 emailAddress            = optional              # Included if present
+
+# Extensions for other signing CAs issued by this signing CA
+[ signing_ca_ext ]
+keyUsage                = critical,keyCertSign,cRLSign
+basicConstraints        = critical,CA:true,pathlen:$ENV::SUBCA_PATHLEN
+subjectKeyIdentifier    = hash
+authorityKeyIdentifier  = keyid:always
+authorityInfoAccess     = @issuer_info
+crlDistributionPoints   = @crl_info
 
 # Extensions for signing certs issued by this signing CA
 [ server_ext ]
